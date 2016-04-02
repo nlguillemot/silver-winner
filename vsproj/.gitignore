@@ -1,0 +1,8 @@
+# Visual Studio temproaries and local stuff
+.vs
+*.VC.db
+*.VC.opendb
+*.vcxproj.user
+
+# Visual Studio build directories
+x64
