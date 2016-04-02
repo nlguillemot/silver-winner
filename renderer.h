@@ -2,6 +2,7 @@
 
 void RendererInit(void* pNativeWindowHandle);
 void RendererExit();
+bool RendererIsInit();
 
 void RendererResize(
     int windowWidth, int windowHeight, 

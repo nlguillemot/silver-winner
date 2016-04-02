@@ -3,6 +3,9 @@
 
 #include "dxutil.h"
 
+#include "imgui.h"
+#include "imgui_impl_dx11.h"
+
 struct App
 {
     HWND hWnd;
@@ -11,16 +14,36 @@ struct App
 
 App g_App;
 
-static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+IMGUI_API LRESULT ImGui_ImplDX11_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    switch (message)
+    if (ImGui_ImplDX11_WndProcHandler(hWnd, msg, wParam, lParam))
     {
+        return 1;
+    }
+
+    switch (msg)
+    {
+    case WM_SIZE:
+        if (RendererIsInit() && wParam != SIZE_MINIMIZED)
+        {
+            int windowWidth = (int)LOWORD(lParam);
+            int windowHeight = (int)HIWORD(lParam);
+            int renderWidth = windowWidth;
+            int renderHeight = windowHeight;
+            RendererResize(windowWidth, windowHeight, renderWidth, renderHeight);
+        }
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
+            return 0;
+        break;
     case WM_CLOSE:
         g_App.bShouldClose = true;
         return 0;
     }
 
-    return DefWindowProcW(hWnd, message, wParam, lParam);
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
 static void AppInit(int width, int height, const char* title)
@@ -87,6 +110,8 @@ void AppMain()
         {
             break;
         }
+
+        ImGui_ImplDX11_NewFrame();
 
         RendererPaint();
     }

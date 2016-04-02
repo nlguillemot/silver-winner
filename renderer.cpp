@@ -5,6 +5,9 @@
 
 #include "scene.h"
 
+#include "imgui.h"
+#include "imgui_impl_dx11.h"
+
 static const D3D_FEATURE_LEVEL kMinFeatureLevel = D3D_FEATURE_LEVEL_12_1;
 static const int kSwapChainBufferCount = 3;
 static const DXGI_FORMAT kSwapChainFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -13,6 +16,8 @@ static const UINT kSwapChainFlags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_
 
 struct Renderer
 {
+    bool IsInit;
+
     ComPtr<ID3D11Device> pDevice;
     ComPtr<ID3D11DeviceContext> pDeviceContext;
     ComPtr<IDXGISwapChain3> pSwapChain;
@@ -45,7 +50,7 @@ void RendererInit(void* pNativeWindowHandle)
 
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 #if _DEBUG
-    flags |= D3D11_CREATE_DEVICE_DEBUG; // | D3D11_CREATE_DEVICE_DEBUGGABLE;
+    flags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
 
     ComPtr<ID3D11Device> pDevice;
@@ -86,18 +91,27 @@ void RendererInit(void* pNativeWindowHandle)
     }
 
     hFrameLatencyWaitableObject = pSwapChain->GetFrameLatencyWaitableObject();
+    CHECKHR(pDXGIFactory->MakeWindowAssociation((HWND)pNativeWindowHandle, DXGI_MWA_NO_WINDOW_CHANGES));
 
+    ImGui_ImplDX11_Init(pNativeWindowHandle, pDevice.Get(), pDeviceContext.Get());
     SceneInit(pDevice.Get(), pDeviceContext.Get());
 
     g_Renderer.pDevice.Swap(pDevice);
     g_Renderer.pDeviceContext.Swap(pDeviceContext);
     g_Renderer.pSwapChain.Swap(pSwapChain);
     g_Renderer.hFrameLatencyWaitableObject = hFrameLatencyWaitableObject;
+    g_Renderer.IsInit = true;
 }
 
 void RendererExit()
 {
+    ImGui_ImplDX11_Shutdown();
     g_Renderer = Renderer();
+}
+
+bool RendererIsInit()
+{
+    return g_Renderer.IsInit;
 }
 
 void RendererResize(
@@ -135,7 +149,14 @@ void RendererPaint()
     CHECKHR(sc->GetBuffer(0, IID_PPV_ARGS(&pBackBufferTex2D)));
     CHECKHR(dev->CreateRenderTargetView(pBackBufferTex2D.Get(), pBackBufferRTVDesc, &pBackBufferRTV));
     
+    // Render Scene
     ScenePaint(pBackBufferRTV.Get());
+
+    // Render ImGui
+    ID3D11RenderTargetView* imguiRTVs[] = { pBackBufferRTV.Get() };
+    dc->OMSetRenderTargets(_countof(imguiRTVs), imguiRTVs, NULL);
+    ImGui::Render();
+    dc->OMSetRenderTargets(0, NULL, NULL);
 
     CHECKHR(sc->Present(0, 0));
 }

@@ -1,5 +1,7 @@
 #include "scene.h"
 
+#include "imgui.h"
+
 struct Scene
 {
     ID3D11Device* pDevice;
@@ -62,4 +64,6 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
     ID3D11DepthStencilView* dsv = g_Scene.pSceneDepthDSV.Get();
     dc->OMSetRenderTargets(_countof(rtvs), rtvs, dsv);
     dc->OMSetRenderTargets(0, NULL, NULL);
+
+    ImGui::ShowTestWindow();
 }
