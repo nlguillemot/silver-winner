@@ -30,3 +30,9 @@
 # Visual Studio binary extras
 *.ilk
 *.pdb
+
+# Imgui
+imgui.ini
+
+# dumb stuff
+Thumbs.db
