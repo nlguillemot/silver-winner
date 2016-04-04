@@ -12,7 +12,7 @@
 
 #include <vector>
 
-static const D3D_FEATURE_LEVEL kMinFeatureLevel = D3D_FEATURE_LEVEL_12_1;
+static const D3D_FEATURE_LEVEL kMinFeatureLevel = D3D_FEATURE_LEVEL_11_0;
 static const int kSwapChainBufferCount = 3;
 static const DXGI_FORMAT kSwapChainFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
 static const DXGI_FORMAT kSwapChainRTVFormat = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
