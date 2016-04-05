@@ -52,6 +52,7 @@ struct Material
     float Shininess;
     float Opacity;
     int DiffuseTextureID;
+    int SpecularTextureID;
 };
 
 struct StaticMesh
@@ -117,6 +118,7 @@ struct Scene
     ComPtr<ID3D11Buffer> pSceneNodeBuffer;
 
     ComPtr<ID3D11SamplerState> pDiffuseSampler;
+    ComPtr<ID3D11SamplerState> pSpecularSampler;
 
     ComPtr<ID3D11InputLayout> pSceneInputLayout;
     ComPtr<ID3D11RasterizerState> pSceneRasterizerState;
@@ -166,51 +168,90 @@ static void SceneAddObjMesh(
         m.Shininess = material.shininess;
         m.Opacity = material.dissolve;
         m.DiffuseTextureID = -1;
+        m.SpecularTextureID = -1;
 
-        if (!material.diffuse_texname.empty())
+        struct TextureToLoad
         {
-            std::string diffusePath = mtlbasepath + material.diffuse_texname;
-            auto foundDiffuse = g_Scene.TextureNameToID.find(diffusePath);
-            if (foundDiffuse == end(g_Scene.TextureNameToID))
+            enum TextureToLoadType
             {
+                TTLTYPE_DIFFUSE,
+                TTLTYPE_SPECULAR,
+                TTLTYPE_Count
+            };
+
+            std::string Name;
+            TextureToLoadType Type;
+            int* pID;
+        };
+
+        TextureToLoad texturesToLoad[] = {
+            TextureToLoad { material.diffuse_texname, TextureToLoad::TTLTYPE_DIFFUSE, &m.DiffuseTextureID },
+            TextureToLoad { material.specular_texname, TextureToLoad::TTLTYPE_SPECULAR, &m.SpecularTextureID },
+        };
+
+        for (TextureToLoad& ttl : texturesToLoad)
+        {
+            if (ttl.Name.empty())
+                continue;
+
+            std::string texturePath = mtlbasepath + ttl.Name;
+            auto foundTexture = g_Scene.TextureNameToID.find(texturePath);
+            if (foundTexture == end(g_Scene.TextureNameToID))
+            {
+                static const DXGI_FORMAT kTextureTypeToFormat[TextureToLoad::TTLTYPE_Count] = {
+                    DXGI_FORMAT_R8G8B8A8_TYPELESS,
+                    DXGI_FORMAT_R8_TYPELESS
+                };
+
+                static const DXGI_FORMAT kTextureTypeToSRVFormat[TextureToLoad::TTLTYPE_Count] = {
+                    DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+                    DXGI_FORMAT_R8_UNORM
+                };
+
+                static const int kTextureTypeToReqComp[TextureToLoad::TTLTYPE_Count] = {
+                    4,
+                    1
+                };
+
                 int width, height, comp;
-                stbi_uc* imgbytes = stbi_load(diffusePath.c_str(), &width, &height, &comp, 4);
+                int req_comp = kTextureTypeToReqComp[ttl.Type];
+                stbi_uc* imgbytes = stbi_load(texturePath.c_str(), &width, &height, &comp, req_comp);
                 if (imgbytes == NULL)
                 {
-                    SimpleMessageBox_FatalError("stbi_load(%s) failed.\nReason: %s", diffusePath.c_str(), stbi_failure_reason());
+                    SimpleMessageBox_FatalError("stbi_load(%s) failed.\nReason: %s", texturePath.c_str(), stbi_failure_reason());
                 }
 
-                ComPtr<ID3D11Texture2D> pDiffuseTexture;
+                ComPtr<ID3D11Texture2D> pTexture;
 
-                D3D11_TEXTURE2D_DESC diffuseTextureDesc = CD3D11_TEXTURE2D_DESC(DXGI_FORMAT_R8G8B8A8_TYPELESS, width, height);
-                diffuseTextureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-                diffuseTextureDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
-                CHECKHR(dev->CreateTexture2D(&diffuseTextureDesc, NULL, &pDiffuseTexture));
+                D3D11_TEXTURE2D_DESC textureDesc = CD3D11_TEXTURE2D_DESC(kTextureTypeToFormat[ttl.Type], width, height);
+                textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+                textureDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+                CHECKHR(dev->CreateTexture2D(&textureDesc, NULL, &pTexture));
 
-                ComPtr<ID3D11ShaderResourceView> pDiffuseSRV;
+                ComPtr<ID3D11ShaderResourceView> pSRV;
 
                 CHECKHR(dev->CreateShaderResourceView(
-                    pDiffuseTexture.Get(),
-                    &CD3D11_SHADER_RESOURCE_VIEW_DESC(D3D11_SRV_DIMENSION_TEXTURE2D, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB),
-                    &pDiffuseSRV));
+                    pTexture.Get(),
+                    &CD3D11_SHADER_RESOURCE_VIEW_DESC(D3D11_SRV_DIMENSION_TEXTURE2D, kTextureTypeToSRVFormat[ttl.Type]),
+                    &pSRV));
 
-                dc->UpdateSubresource(pDiffuseTexture.Get(), 0, NULL, imgbytes, width * sizeof(UINT32), width * height * sizeof(UINT32));
-                dc->GenerateMips(pDiffuseSRV.Get());
+                dc->UpdateSubresource(pTexture.Get(), 0, NULL, imgbytes, width * req_comp, width * height * req_comp);
+                dc->GenerateMips(pSRV.Get());
 
                 Texture texture;
-                texture.Name = diffusePath;
-                texture.Resource = pDiffuseTexture;
-                texture.SRV = pDiffuseSRV;
+                texture.Name = texturePath;
+                texture.Resource = pTexture;
+                texture.SRV = pSRV;
 
-                int diffuseTextureID = (int)g_Scene.Textures.size();
+                int textureID = (int)g_Scene.Textures.size();
                 g_Scene.Textures.push_back(std::move(texture));
-                g_Scene.TextureNameToID[diffusePath] = diffuseTextureID;
+                g_Scene.TextureNameToID[texturePath] = textureID;
 
-                m.DiffuseTextureID = diffuseTextureID;
+                *ttl.pID = textureID;
             }
             else
             {
-                m.DiffuseTextureID = foundDiffuse->second;
+                *ttl.pID = foundTexture->second;
             }
         }
 
@@ -413,6 +454,13 @@ void SceneInit()
     diffuseSamplerDesc.MaxAnisotropy = 8;
     CHECKHR(dev->CreateSamplerState(&diffuseSamplerDesc, &g_Scene.pDiffuseSampler));
 
+    CD3D11_SAMPLER_DESC specularSamplerDesc(D3D11_DEFAULT);
+    specularSamplerDesc.Filter = D3D11_FILTER_ANISOTROPIC;
+    specularSamplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+    specularSamplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+    specularSamplerDesc.MaxAnisotropy = 8;
+    CHECKHR(dev->CreateSamplerState(&specularSamplerDesc, &g_Scene.pSpecularSampler));
+
     D3D11_INPUT_ELEMENT_DESC sceneInputElements[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 1, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
@@ -510,6 +558,8 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
 
         PerCameraData* camera = (PerCameraData*)mappedCamera.pData;
         XMStoreFloat4x4(&camera->WorldViewProjection, XMMatrixTranspose(worldViewProjection));
+        XMStoreFloat4(&camera->WorldPosition, XMVectorSetW(XMLoadFloat3(&g_Scene.CameraPos),1.0f));
+
         dc->Unmap(g_Scene.pCameraBuffer.Get(), 0);
     }
 
@@ -535,8 +585,9 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
     dc->OMSetBlendState(g_Scene.pSceneBlendState.Get(), NULL, UINT_MAX);
     dc->RSSetViewports(1, &g_Scene.SceneViewport);
     
-    ID3D11Buffer* sceneCBV = g_Scene.pCameraBuffer.Get();
-    dc->VSSetConstantBuffers(CAMERA_BUFFER_SLOT, 1, &sceneCBV);
+    ID3D11Buffer* cameraCBV = g_Scene.pCameraBuffer.Get();
+    dc->VSSetConstantBuffers(CAMERA_BUFFER_SLOT, 1, &cameraCBV);
+    dc->PSSetConstantBuffers(CAMERA_BUFFER_SLOT, 1, &cameraCBV);
 
     int currMaterialID = -1;
     for (int sceneNodeID = 0; sceneNodeID < (int)g_Scene.SceneNodes.size(); sceneNodeID++)
@@ -571,6 +622,14 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
             ID3D11SamplerState* diffuseSMP = g_Scene.pDiffuseSampler.Get();
             dc->PSSetSamplers(DIFFUSE_SAMPLER_SLOT, 1, &diffuseSMP);
 
+            ID3D11ShaderResourceView* specularSRV = NULL;
+            if (material.SpecularTextureID != -1)
+                specularSRV = g_Scene.Textures[material.SpecularTextureID].SRV.Get();
+            dc->PSSetShaderResources(SPECULAR_TEXTURE_SLOT, 1, &specularSRV);
+
+            ID3D11SamplerState* specularSMP = g_Scene.pSpecularSampler.Get();
+            dc->PSSetSamplers(SPECULAR_SAMPLER_SLOT, 1, &specularSMP);
+
             currMaterialID = sceneNode.MaterialID;
         }
         
@@ -580,11 +639,17 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
             dc->Map(g_Scene.pSceneNodeBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
 
             PerSceneNodeData* sceneNodeData = (PerSceneNodeData*)mapped.pData;
+            
             XMMATRIX worldMatrix = XMMatrixIdentity();
             worldMatrix = XMMatrixMultiply(worldMatrix, XMMatrixScalingFromVector(sceneNode.Transform.Scale));
             worldMatrix = XMMatrixMultiply(worldMatrix, XMMatrixRotationQuaternion(sceneNode.Transform.Quaternion));
             worldMatrix = XMMatrixMultiply(worldMatrix, XMMatrixTranslationFromVector(sceneNode.Transform.Translation));
             XMStoreFloat4x4(&sceneNodeData->WorldTransform, XMMatrixTranspose(worldMatrix));
+
+            XMMATRIX normalMatrix = XMMatrixIdentity();
+            normalMatrix = XMMatrixMultiply(normalMatrix, XMMatrixScalingFromVector(XMVectorReciprocal(sceneNode.Transform.Scale)));
+            normalMatrix = XMMatrixMultiply(normalMatrix, XMMatrixRotationQuaternion(sceneNode.Transform.Quaternion));
+            XMStoreFloat4x4(&sceneNodeData->NormalTransform, XMMatrixTranspose(normalMatrix));
 
             dc->Unmap(g_Scene.pSceneNodeBuffer.Get(), 0);
 

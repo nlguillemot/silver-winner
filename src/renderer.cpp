@@ -194,6 +194,10 @@ static void RendererReloadShader(ReloadableShader* shader)
     {
         printf("Warning (%s): %s\n", path.c_str(), (char*)pErrorMsgs->GetBufferPointer());
     }
+    else
+    {
+        printf("%s compiled clean\n", path.c_str());
+    }
 
     ComPtr<ID3D11DeviceChild> shaderComPtr;
     ID3D11VertexShader* VS = 0;

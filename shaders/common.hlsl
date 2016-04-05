@@ -4,6 +4,7 @@
 struct PerCameraData
 {
     float4x4 WorldViewProjection;
+    float4 WorldPosition;
 };
 
 struct PerMaterialData
@@ -18,6 +19,7 @@ struct PerMaterialData
 struct PerSceneNodeData
 {
     float4x4 WorldTransform;
+    float4x4 NormalTransform;
 };
 
 #define CAMERA_BUFFER_SLOT 0
@@ -25,8 +27,10 @@ struct PerSceneNodeData
 #define SCENENODE_BUFFER_SLOT 2
 
 #define DIFFUSE_TEXTURE_SLOT 0
+#define SPECULAR_TEXTURE_SLOT 1
 
 #define DIFFUSE_SAMPLER_SLOT 0
+#define SPECULAR_SAMPLER_SLOT 1
 
 #define BUFFER_REGISTER(slot) register(b##slot)
 #define TEXTURE_REGISTER(slot) register(t##slot)
