@@ -5,7 +5,6 @@ struct VSIn
     float4 Position : POSITION;
     float2 TexCoord : TEXCOORD;
     float3 Normal : NORMAL;
-    //uint VertexID : SV_VertexID;
 };
 
 struct VSOut
@@ -18,15 +17,25 @@ struct PSOut
     float4 Color : SV_Target;
 };
 
-cbuffer Camera : register(b0)
+cbuffer CameraBuffer : BUFFER_REGISTER(CAMERA_BUFFER_SLOT)
 {
     PerCameraData Camera;
+};
+
+cbuffer MaterialBuffer : BUFFER_REGISTER(MATERIAL_BUFFER_SLOT)
+{
+    PerMaterialData Material;
+};
+
+cbuffer SceneNodeBuffer : BUFFER_REGISTER(SCENENODE_BUFFER_SLOT)
+{
+    PerSceneNodeData SceneNode;
 };
 
 VSOut VSmain(VSIn input)
 {
     VSOut output;
-    output.Position = mul(input.Position, Camera.WorldViewProjection);
+    output.Position = mul(mul(input.Position, SceneNode.WorldTransform), Camera.WorldViewProjection);
     return output;
 }
 
