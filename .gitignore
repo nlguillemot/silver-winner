@@ -27,9 +27,12 @@
 *.out
 *.app
 
-# Visual Studio binary extras
+# Visual Studio stuff
 *.ilk
 *.pdb
+.vs
+*.iobj
+*.ipdb
 
 # Imgui
 imgui.ini

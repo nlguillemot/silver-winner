@@ -80,13 +80,13 @@ static void AppInit(int width, int height, const char* title)
         cr.right - cr.left, cr.bottom - cr.top,
         cr.right - cr.left, cr.bottom - cr.top);
 
-    CHECKWIN32(ShowWindow(hWnd, SW_SHOWDEFAULT));
+    ShowWindow(hWnd, SW_SHOWDEFAULT);
 
     g_App.hWnd = hWnd;
     g_App.bShouldClose = false;
 }
 
-void AppExit()
+static void AppExit()
 {
     RendererExit();
     
@@ -117,4 +117,13 @@ void AppMain()
     }
 
     AppExit();
+}
+
+void AppGetClientCursorPos(int* x, int* y)
+{
+    POINT cursorPos;
+    CHECKWIN32(GetCursorPos(&cursorPos));
+    CHECKWIN32(ScreenToClient(g_App.hWnd, &cursorPos));
+    if (x) *x = cursorPos.x;
+    if (y) *y = cursorPos.y;
 }

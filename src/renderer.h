@@ -22,6 +22,8 @@ void RendererInit(void* pNativeWindowHandle);
 void RendererExit();
 bool RendererIsInit();
 
+Shader* RendererAddShader(const char* file, const char* entry, const char* target);
+
 void RendererResize(
     int windowWidth, int windowHeight, 
     int renderWidth, int renderHeight);
@@ -30,5 +32,3 @@ void RendererPaint();
 
 ID3D11Device* RendererGetDevice();
 ID3D11DeviceContext* RendererGetDeviceContext();
-
-Shader* RendererAddShader(const char* file, const char* entry, const char* target);

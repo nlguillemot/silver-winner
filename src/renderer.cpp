@@ -23,6 +23,7 @@ struct ReloadableShader
     std::string Path;
     std::string EntryPoint;
     std::string Target;
+    uint64_t Timestamp;
 
     ComPtr<ID3DBlob> Blob;
     ComPtr<ID3D11DeviceChild> ShaderComPtr;
@@ -36,7 +37,7 @@ struct Renderer
 
     ComPtr<ID3D11Device> pDevice;
     ComPtr<ID3D11DeviceContext> pDeviceContext;
-    ComPtr<IDXGISwapChain3> pSwapChain;
+    ComPtr<IDXGISwapChain2> pSwapChain;
     HANDLE hFrameLatencyWaitableObject;
     D3D11_RENDER_TARGET_VIEW_DESC BackBufferRTVDesc;
 
@@ -71,7 +72,7 @@ void RendererInit(void* pNativeWindowHandle)
 
     ComPtr<ID3D11Device> pDevice;
     ComPtr<ID3D11DeviceContext> pDeviceContext;
-    ComPtr<IDXGISwapChain3> pSwapChain;
+    ComPtr<IDXGISwapChain2> pSwapChain;
     HANDLE hFrameLatencyWaitableObject;
 
     D3D_FEATURE_LEVEL kFeatureLevels[] = {
@@ -135,69 +136,36 @@ bool RendererIsInit()
     return g_Renderer.IsInit;
 }
 
-void RendererResize(
-    int windowWidth, int windowHeight,
-    int renderWidth, int renderHeight)
-{
-    IDXGISwapChain* sc = g_Renderer.pSwapChain.Get();
-    D3D11_RENDER_TARGET_VIEW_DESC* pBackBufferRTVDesc = &g_Renderer.BackBufferRTVDesc;
-
-    CHECKHR(sc->ResizeBuffers(
-        kSwapChainBufferCount, 
-        renderWidth, renderHeight, 
-        kSwapChainFormat, kSwapChainFlags));
-
-    pBackBufferRTVDesc->Format = kSwapChainRTVFormat;
-    pBackBufferRTVDesc->ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-
-    SceneResize(windowWidth, windowHeight, renderWidth, renderHeight);
-}
-
-void RendererPaint()
-{
-    ID3D11Device* dev = g_Renderer.pDevice.Get();
-    ID3D11DeviceContext* dc = g_Renderer.pDeviceContext.Get();
-    IDXGISwapChain* sc = g_Renderer.pSwapChain.Get();
-    HANDLE hFrameLatencyWaitableObject = g_Renderer.hFrameLatencyWaitableObject;
-    D3D11_RENDER_TARGET_VIEW_DESC* pBackBufferRTVDesc = &g_Renderer.BackBufferRTVDesc;
-
-    // Wait until the previous frame is presented before drawing the next frame
-    CHECKWIN32(WaitForSingleObject(hFrameLatencyWaitableObject, INFINITE) == WAIT_OBJECT_0);
-
-    // grab the current backbuffer
-    ComPtr<ID3D11Texture2D> pBackBufferTex2D;
-    ComPtr<ID3D11RenderTargetView> pBackBufferRTV;
-    CHECKHR(sc->GetBuffer(0, IID_PPV_ARGS(&pBackBufferTex2D)));
-    CHECKHR(dev->CreateRenderTargetView(pBackBufferTex2D.Get(), pBackBufferRTVDesc, &pBackBufferRTV));
-    
-    // Render Scene
-    ScenePaint(pBackBufferRTV.Get());
-
-    // Render ImGui
-    ID3D11RenderTargetView* imguiRTVs[] = { pBackBufferRTV.Get() };
-    dc->OMSetRenderTargets(_countof(imguiRTVs), imguiRTVs, NULL);
-    ImGui::Render();
-    dc->OMSetRenderTargets(0, NULL, NULL);
-
-    CHECKHR(sc->Present(0, 0));
-}
-
-ID3D11Device* RendererGetDevice()
-{
-    return g_Renderer.pDevice.Get();
-}
-
-ID3D11DeviceContext* RendererGetDeviceContext()
-{
-    return g_Renderer.pDeviceContext.Get();
-}
-
-Shader* RendererAddShader(const char* file, const char* entry, const char* target)
+static void RendererReloadShader(ReloadableShader* shader)
 {
     ID3D11Device* dev = g_Renderer.pDevice.Get();
 
-    std::string path = std::string("shaders/") + file;
+    std::string path = shader->Path;
     std::wstring wpath = WideFromMultiByte(path);
+
+    uint64_t newTimestamp = 0;
+
+    HANDLE hFile = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE)
+    {
+        FILETIME lastWriteTime;
+        if (GetFileTime(hFile, NULL, NULL, &lastWriteTime))
+        {
+            LARGE_INTEGER largeWriteTime;
+            largeWriteTime.HighPart = lastWriteTime.dwHighDateTime;
+            largeWriteTime.LowPart = lastWriteTime.dwLowDateTime;
+            newTimestamp = largeWriteTime.QuadPart;
+        }
+
+        CloseHandle(hFile);
+    }
+
+    if (newTimestamp == 0 || (shader->Timestamp != 0 && shader->Timestamp >= newTimestamp))
+    {
+        return;
+    }
+
+    shader->Timestamp = newTimestamp;
 
     UINT flags = 0;
 #if _DEBUG
@@ -208,18 +176,18 @@ Shader* RendererAddShader(const char* file, const char* entry, const char* targe
 
     ComPtr<ID3DBlob> pCode;
     ComPtr<ID3DBlob> pErrorMsgs;
-    HRESULT hr = D3DCompileFromFile(wpath.c_str(), NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, entry, target, flags, 0, &pCode, &pErrorMsgs);
+    HRESULT hr = D3DCompileFromFile(wpath.c_str(), NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE, shader->EntryPoint.c_str(), shader->Target.c_str(), flags, 0, &pCode, &pErrorMsgs);
     if (FAILED(hr))
     {
         std::string hrs = MultiByteFromHR(hr);
-        SimpleMessageBox_FatalError(
+        fprintf(stderr,
             "Error (%s):\n%s%s%s",
             path.c_str(),
             hrs.c_str(),
             pErrorMsgs ? "\n" : "",
-            pErrorMsgs ? pErrorMsgs->GetBufferPointer() : "");
-        
-        return NULL;
+            pErrorMsgs ? (const char*)pErrorMsgs->GetBufferPointer() : "");
+
+        return;
     }
 
     if (pErrorMsgs)
@@ -235,7 +203,7 @@ Shader* RendererAddShader(const char* file, const char* entry, const char* targe
     ID3D11DomainShader* DS = 0;
     ID3D11ComputeShader* CS = 0;
 
-    std::string target2 = std::string(target).substr(0, 2);
+    std::string target2 = std::string(shader->Target).substr(0, 2);
     if (target2 == "vs")
     {
         ComPtr<ID3D11VertexShader> vs;
@@ -280,28 +248,103 @@ Shader* RendererAddShader(const char* file, const char* entry, const char* targe
     }
     else
     {
-        SimpleMessageBox_FatalError("Unhandled shader target: %s\n", target);
+        SimpleMessageBox_FatalError("Unhandled shader target: %s\n", shader->Target.c_str());
     }
 
+    (ID3DBlob*&)shader->pShader->Blob = pCode.Get();
+    (ID3D11VertexShader*&)shader->pShader->VS = VS;
+    (ID3D11PixelShader*&)shader->pShader->PS = PS;
+    (ID3D11GeometryShader*&)shader->pShader->GS = GS;
+    (ID3D11HullShader*&)shader->pShader->HS = HS;
+    (ID3D11DomainShader*&)shader->pShader->DS = DS;
+    (ID3D11ComputeShader*&)shader->pShader->CS = CS;
+
+    shader->Blob = pCode;
+    shader->ShaderComPtr = shaderComPtr;
+}
+
+Shader* RendererAddShader(const char* file, const char* entry, const char* target)
+{
+    ID3D11Device* dev = g_Renderer.pDevice.Get();
+
+    std::string path = std::string("shaders/") + file;
+
     Shader* sh = (Shader*)calloc(1, sizeof(Shader));
-    (ID3DBlob*&)sh->Blob = pCode.Get();
-    (ID3D11VertexShader*&)sh->VS = VS;
-    (ID3D11PixelShader*&)sh->PS = PS;
-    (ID3D11GeometryShader*&)sh->GS = GS;
-    (ID3D11HullShader*&)sh->HS = HS;
-    (ID3D11DomainShader*&)sh->DS = DS;
-    (ID3D11ComputeShader*&)sh->CS = CS;
 
     ReloadableShader rs;
     rs.Path = path;
     rs.EntryPoint = entry;
     rs.Target = target;
-    rs.Blob = pCode;
-    rs.ShaderComPtr = shaderComPtr;
+    rs.Timestamp = 0;
     rs.pShader = sh;
+
+    RendererReloadShader(&rs);
 
     g_Renderer.Shaders.push_back(sh);
     g_Renderer.ShaderReloaders.push_back(std::move(rs));
 
     return sh;
+}
+
+void RendererResize(
+    int windowWidth, int windowHeight,
+    int renderWidth, int renderHeight)
+{
+    IDXGISwapChain* sc = g_Renderer.pSwapChain.Get();
+    D3D11_RENDER_TARGET_VIEW_DESC* pBackBufferRTVDesc = &g_Renderer.BackBufferRTVDesc;
+
+    CHECKHR(sc->ResizeBuffers(
+        kSwapChainBufferCount,
+        renderWidth, renderHeight,
+        kSwapChainFormat, kSwapChainFlags));
+
+    pBackBufferRTVDesc->Format = kSwapChainRTVFormat;
+    pBackBufferRTVDesc->ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+
+    SceneResize(windowWidth, windowHeight, renderWidth, renderHeight);
+}
+
+void RendererPaint()
+{
+    ID3D11Device* dev = g_Renderer.pDevice.Get();
+    ID3D11DeviceContext* dc = g_Renderer.pDeviceContext.Get();
+    IDXGISwapChain* sc = g_Renderer.pSwapChain.Get();
+    HANDLE hFrameLatencyWaitableObject = g_Renderer.hFrameLatencyWaitableObject;
+    D3D11_RENDER_TARGET_VIEW_DESC* pBackBufferRTVDesc = &g_Renderer.BackBufferRTVDesc;
+
+    // Wait until the previous frame is presented before drawing the next frame
+    CHECKWIN32(WaitForSingleObject(hFrameLatencyWaitableObject, INFINITE) == WAIT_OBJECT_0);
+
+    // Reload all shaders
+    for (ReloadableShader& shader : g_Renderer.ShaderReloaders)
+    {
+        RendererReloadShader(&shader);
+    }
+
+    // grab the current backbuffer
+    ComPtr<ID3D11Texture2D> pBackBufferTex2D;
+    ComPtr<ID3D11RenderTargetView> pBackBufferRTV;
+    CHECKHR(sc->GetBuffer(0, IID_PPV_ARGS(&pBackBufferTex2D)));
+    CHECKHR(dev->CreateRenderTargetView(pBackBufferTex2D.Get(), pBackBufferRTVDesc, &pBackBufferRTV));
+
+    // Render Scene
+    ScenePaint(pBackBufferRTV.Get());
+
+    // Render ImGui
+    ID3D11RenderTargetView* imguiRTVs[] = { pBackBufferRTV.Get() };
+    dc->OMSetRenderTargets(_countof(imguiRTVs), imguiRTVs, NULL);
+    ImGui::Render();
+    dc->OMSetRenderTargets(0, NULL, NULL);
+
+    CHECKHR(sc->Present(0, 0));
+}
+
+ID3D11Device* RendererGetDevice()
+{
+    return g_Renderer.pDevice.Get();
+}
+
+ID3D11DeviceContext* RendererGetDeviceContext()
+{
+    return g_Renderer.pDeviceContext.Get();
 }

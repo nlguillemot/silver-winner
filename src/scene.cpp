@@ -2,10 +2,11 @@
 
 #include "apputil.h"
 #include "renderer.h"
+#include "app.h"
+#include "flythrough_camera.h"
 
 #include "imgui.h"
 #include "tiny_obj_loader.h"
-#include "qfpc.h"
 
 #include <DirectXMath.h>
 
@@ -51,18 +52,21 @@ struct Scene
     ComPtr<ID3D11Texture2D> pSceneDepthTex2D;
     ComPtr<ID3D11DepthStencilView> pSceneDepthDSV;
 
-    ComPtr<ID3D11Buffer> pCameraBuffer;
-    XMFLOAT3 CameraPosition;
-    XMFLOAT4 CameraQuaternion;
-    XMFLOAT3X3 CameraRotation;
     uint64_t LastPaintTicks;
+
+    XMFLOAT3 CameraPos;
+    XMFLOAT3 CameraLook;
+    ComPtr<ID3D11Buffer> pCameraBuffer;
 
     ComPtr<ID3D11InputLayout> pSceneInputLayout;
     ComPtr<ID3D11RasterizerState> pSceneRasterizerState;
+    ComPtr<ID3D11DepthStencilState> pSceneDepthStencilState;
     ComPtr<ID3D11BlendState> pSceneBlendState;
 
     Shader* SceneVS;
     Shader* ScenePS;
+
+    int LastMouseX, LastMouseY;
 };
 
 Scene g_Scene;
@@ -172,8 +176,8 @@ void SceneInit()
 {
     ID3D11Device* dev = RendererGetDevice();
 
-    // SceneAddObjMesh("assets/sponza/sponza.obj", "assets/sponza/");
-    SceneAddObjMesh("assets/cube/cube.obj", "assets/cube/");
+    SceneAddObjMesh("assets/sponza/sponza.obj", "assets/sponza/");
+    // SceneAddObjMesh("assets/cube/cube.obj", "assets/cube/");
 
     g_Scene.SceneVS = RendererAddShader("scene.hlsl", "VSmain", "vs_5_0");
     g_Scene.ScenePS = RendererAddShader("scene.hlsl", "PSmain", "ps_5_0");
@@ -202,12 +206,21 @@ void SceneInit()
     sceneRasterizerDesc.DepthClipEnable = TRUE;
     CHECKHR(dev->CreateRasterizerState(&sceneRasterizerDesc, &g_Scene.pSceneRasterizerState));
 
+    D3D11_DEPTH_STENCIL_DESC sceneDepthStencilDesc = {};
+    sceneDepthStencilDesc.DepthEnable = TRUE;
+    sceneDepthStencilDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+    sceneDepthStencilDesc.DepthFunc = D3D11_COMPARISON_LESS;
+    CHECKHR(dev->CreateDepthStencilState(&sceneDepthStencilDesc, &g_Scene.pSceneDepthStencilState));
+
     D3D11_BLEND_DESC sceneBlendDesc = {};
     sceneBlendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
     CHECKHR(dev->CreateBlendState(&sceneBlendDesc, &g_Scene.pSceneBlendState));
 
-    XMStoreFloat3(&g_Scene.CameraPosition, XMVectorSet(85.9077225f, 200.844162f, 140.049072f, 1.0f));
-    XMStoreFloat4(&g_Scene.CameraQuaternion, XMVectorSet(-0.351835f, 0.231701f, 0.090335f, 0.902411f));
+    XMStoreFloat3(&g_Scene.CameraPos, XMVectorSet(0.0f, 200.0f, 0.0f, 1.0f));
+    XMStoreFloat3(&g_Scene.CameraLook, XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f));
+
+    g_Scene.LastMouseX = INT_MIN;
+    g_Scene.LastMouseY = INT_MIN;
 }
 
 void SceneResize(
@@ -254,32 +267,43 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
     uint64_t ticksPerSecond;
     QueryPerformanceFrequency((LARGE_INTEGER*)&ticksPerSecond);
 
+    int currMouseX, currMouseY;
+    AppGetClientCursorPos(&currMouseX, &currMouseY);
+    
+    // Initialize the last mouse position on the first update
+    if (g_Scene.LastMouseX == INT_MIN)
+        g_Scene.LastMouseX = currMouseX;
+    if (g_Scene.LastMouseY == INT_MIN)
+        g_Scene.LastMouseY = currMouseY;
+
     ID3D11Device* dev = RendererGetDevice();
     ID3D11DeviceContext* dc = RendererGetDeviceContext();
 
     // Update camera
     {
-        quatFirstPersonCamera(
-            &g_Scene.CameraPosition.x,
-            &g_Scene.CameraQuaternion.x,
-            &g_Scene.CameraRotation.m[0][0],
-            0.10f,
-            60.0f * deltaTicks / ticksPerSecond,
-            0, 0,
-            GetAsyncKeyState('W'),
-            GetAsyncKeyState('A'),
-            GetAsyncKeyState('S'),
-            GetAsyncKeyState('D'),
-            GetAsyncKeyState(VK_SPACE),
-            GetAsyncKeyState(VK_LCONTROL));
+        float activated = GetAsyncKeyState(VK_RBUTTON) ? 1.0f : 0.0f;
+        float up[3] = { 0.0f, 1.0f, 0.0f };
+        XMFLOAT4X4 worldView;
+        flythrough_camera_update(
+            &g_Scene.CameraPos.x,
+            &g_Scene.CameraLook.x,
+            up,
+            &worldView.m[0][0],
+            deltaTicks / (float)ticksPerSecond,
+            100.0f * (GetAsyncKeyState(VK_LSHIFT) ? 2.0f : 1.0f) * activated,
+            0.5f * activated,
+            80.0f,
+            currMouseX - g_Scene.LastMouseX, currMouseY - g_Scene.LastMouseY,
+            GetAsyncKeyState('W'), GetAsyncKeyState('A'), GetAsyncKeyState('S'), GetAsyncKeyState('D'),
+            GetAsyncKeyState(VK_SPACE), GetAsyncKeyState(VK_LCONTROL),
+            FLYTHROUGH_CAMERA_LEFT_HANDED_BIT);
 
         D3D11_MAPPED_SUBRESOURCE mappedCamera;
         CHECKHR(dc->Map(g_Scene.pCameraBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedCamera));
 
         float aspectHbyW = g_Scene.SceneViewport.Height / g_Scene.SceneViewport.Width;
-        XMMATRIX viewProjection = XMMatrixPerspectiveFovLH(70.0f, aspectHbyW, 1.0f, 5000.0f);
-        XMMATRIX worldView = XMMatrixMultiply(XMLoadFloat3x3(&g_Scene.CameraRotation), XMMatrixTranslationFromVector(XMLoadFloat3(&g_Scene.CameraPosition)));
-        XMMATRIX worldViewProjection = XMMatrixMultiply(worldView, viewProjection);
+        XMMATRIX viewProjection = XMMatrixPerspectiveFovLH(XMConvertToRadians(90.0f), 1.0f, 1.0f, 5000.0f);
+        XMMATRIX worldViewProjection = XMMatrixMultiply(XMLoadFloat4x4(&worldView), viewProjection);
 
         PerCameraData* camera = (PerCameraData*)mappedCamera.pData;
         XMStoreFloat4x4(&camera->WorldViewProjection, XMMatrixTranspose(worldViewProjection));
@@ -293,6 +317,7 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
         1.0f
     };
     dc->ClearRenderTargetView(pBackBufferRTV, kClearColor);
+    dc->ClearDepthStencilView(g_Scene.pSceneDepthDSV.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
 
     ID3D11RenderTargetView* rtvs[] = { pBackBufferRTV };
     ID3D11DepthStencilView* dsv = g_Scene.pSceneDepthDSV.Get();
@@ -303,6 +328,7 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
     dc->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     dc->IASetInputLayout(g_Scene.pSceneInputLayout.Get());
     dc->RSSetState(g_Scene.pSceneRasterizerState.Get());
+    dc->OMSetDepthStencilState(g_Scene.pSceneDepthStencilState.Get(), 0);
     dc->OMSetBlendState(g_Scene.pSceneBlendState.Get(), NULL, UINT_MAX);
     dc->RSSetViewports(1, &g_Scene.SceneViewport);
     ID3D11Buffer* cbvs[] = { g_Scene.pCameraBuffer.Get() };
@@ -323,5 +349,7 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
     
     dc->OMSetRenderTargets(0, NULL, NULL);
 
-    ImGui::ShowTestWindow();
+    g_Scene.LastPaintTicks = currPaintTicks;
+    g_Scene.LastMouseX = currMouseX;
+    g_Scene.LastMouseY = currMouseY;
 }

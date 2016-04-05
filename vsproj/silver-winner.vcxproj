@@ -14,12 +14,12 @@
     <ClCompile Include="..\src\app.cpp" />
     <ClCompile Include="..\src\apputil.cpp" />
     <ClCompile Include="..\src\dxutil.cpp" />
+    <ClCompile Include="..\src\flythrough_camera.c" />
     <ClCompile Include="..\src\imgui.cpp" />
     <ClCompile Include="..\src\imgui_demo.cpp" />
     <ClCompile Include="..\src\imgui_draw.cpp" />
     <ClCompile Include="..\src\imgui_impl_dx11.cpp" />
     <ClCompile Include="..\src\main.cpp" />
-    <ClCompile Include="..\src\qfpc.cpp" />
     <ClCompile Include="..\src\renderer.cpp" />
     <ClCompile Include="..\src\scene.cpp" />
     <ClCompile Include="..\src\tiny_obj_loader.cc" />
@@ -27,12 +27,12 @@
   <ItemGroup>
     <ClInclude Include="..\src\app.h" />
     <ClInclude Include="..\src\apputil.h" />
+    <ClInclude Include="..\src\flythrough_camera.h" />
     <ClInclude Include="..\src\dxutil.h" />
     <ClInclude Include="..\src\imconfig.h" />
     <ClInclude Include="..\src\imgui.h" />
     <ClInclude Include="..\src\imgui_impl_dx11.h" />
     <ClInclude Include="..\src\imgui_internal.h" />
-    <ClInclude Include="..\src\qfpc.h" />
     <ClInclude Include="..\src\renderer.h" />
     <ClInclude Include="..\src\scene.h" />
     <ClInclude Include="..\src\stb_rect_pack.h" />
@@ -86,6 +86,7 @@
     <IncludePath>$(SolutionDir)..\;$(SolutionDir)..\src\;$(VC_IncludePath);$(WindowsSDK_IncludePath);</IncludePath>
     <LocalDebuggerWorkingDirectory>$(SolutionDir)..\</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+    <TargetName>$(ProjectName)d</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(SolutionDir)..\</OutDir>
