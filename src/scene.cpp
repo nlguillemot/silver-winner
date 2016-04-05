@@ -36,6 +36,16 @@ struct VertexNormal
     XMFLOAT3 Normal;
 };
 
+struct VertexTangent
+{
+    XMFLOAT4 Tangent;
+};
+
+struct VertexBitangent
+{
+    XMFLOAT3 Bitangent;
+};
+
 struct Texture
 {
     std::string Name;
@@ -53,6 +63,7 @@ struct Material
     float Opacity;
     int DiffuseTextureID;
     int SpecularTextureID;
+    int BumpTextureID;
 };
 
 struct StaticMesh
@@ -61,6 +72,8 @@ struct StaticMesh
     ComPtr<ID3D11Buffer> pPositionVertexBuffer;
     ComPtr<ID3D11Buffer> pTexCoordVertexBuffer;
     ComPtr<ID3D11Buffer> pNormalVertexBuffer;
+    ComPtr<ID3D11Buffer> pTangentVertexBuffer;
+    ComPtr<ID3D11Buffer> pBitangentVertexBuffer;
     ComPtr<ID3D11Buffer> pIndexBuffer;
     int MaterialID; // the material this mesh was designed for
     UINT IndexCountPerInstance;
@@ -119,6 +132,7 @@ struct Scene
 
     ComPtr<ID3D11SamplerState> pDiffuseSampler;
     ComPtr<ID3D11SamplerState> pSpecularSampler;
+    ComPtr<ID3D11SamplerState> pBumpSampler;
 
     ComPtr<ID3D11InputLayout> pSceneInputLayout;
     ComPtr<ID3D11RasterizerState> pSceneRasterizerState;
@@ -169,6 +183,7 @@ static void SceneAddObjMesh(
         m.Opacity = material.dissolve;
         m.DiffuseTextureID = -1;
         m.SpecularTextureID = -1;
+        m.BumpTextureID = -1;
 
         struct TextureToLoad
         {
@@ -176,6 +191,7 @@ static void SceneAddObjMesh(
             {
                 TTLTYPE_DIFFUSE,
                 TTLTYPE_SPECULAR,
+                TTLTYPE_BUMP,
                 TTLTYPE_Count
             };
 
@@ -187,6 +203,7 @@ static void SceneAddObjMesh(
         TextureToLoad texturesToLoad[] = {
             TextureToLoad { material.diffuse_texname, TextureToLoad::TTLTYPE_DIFFUSE, &m.DiffuseTextureID },
             TextureToLoad { material.specular_texname, TextureToLoad::TTLTYPE_SPECULAR, &m.SpecularTextureID },
+            TextureToLoad { material.bump_texname, TextureToLoad::TTLTYPE_BUMP, &m.BumpTextureID }
         };
 
         for (TextureToLoad& ttl : texturesToLoad)
@@ -200,16 +217,19 @@ static void SceneAddObjMesh(
             {
                 static const DXGI_FORMAT kTextureTypeToFormat[TextureToLoad::TTLTYPE_Count] = {
                     DXGI_FORMAT_R8G8B8A8_TYPELESS,
+                    DXGI_FORMAT_R8_TYPELESS,
                     DXGI_FORMAT_R8_TYPELESS
                 };
 
                 static const DXGI_FORMAT kTextureTypeToSRVFormat[TextureToLoad::TTLTYPE_Count] = {
                     DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+                    DXGI_FORMAT_R8_UNORM,
                     DXGI_FORMAT_R8_UNORM
                 };
 
                 static const int kTextureTypeToReqComp[TextureToLoad::TTLTYPE_Count] = {
                     4,
+                    1,
                     1
                 };
 
@@ -273,9 +293,11 @@ static void SceneAddObjMesh(
         ComPtr<ID3D11Buffer> pPositionBuffer;
         ComPtr<ID3D11Buffer> pTexCoordBuffer;
         ComPtr<ID3D11Buffer> pNormalBuffer;
+        ComPtr<ID3D11Buffer> pTangentBuffer;
+        ComPtr<ID3D11Buffer> pBitangentBuffer;
         ComPtr<ID3D11Buffer> pIndexBuffer;
 
-        UINT numVertices = (UINT)mesh.positions.size() / 3;
+        int numVertices = (int)mesh.positions.size() / 3;
 
         if (!mesh.positions.empty())
         {
@@ -324,22 +346,125 @@ static void SceneAddObjMesh(
 
         UINT numIndices = (UINT)mesh.indices.size();
 
-        if (!mesh.indices.empty())
+        if (mesh.indices.empty())
         {
-            static_assert(sizeof(mesh.indices[0]) == sizeof(UINT32), "Expecting UINT32 indices");
+            SimpleMessageBox_FatalError("Expected indices");
+        }
 
-            D3D11_SUBRESOURCE_DATA indexBufferData = {};
-            indexBufferData.pSysMem = mesh.indices.data();
+        static_assert(sizeof(mesh.indices[0]) == sizeof(UINT32), "Expecting UINT32 indices");
+
+        D3D11_SUBRESOURCE_DATA indexBufferData = {};
+        indexBufferData.pSysMem = mesh.indices.data();
+
+        CHECKHR(dev->CreateBuffer(
+            &CD3D11_BUFFER_DESC(sizeof(UINT32) * numIndices, D3D11_BIND_INDEX_BUFFER, D3D11_USAGE_IMMUTABLE), 
+            &indexBufferData, 
+            &pIndexBuffer));
+
+        const int numFaces = (int)shape.mesh.indices.size() / 3;
+
+        // Generate tangents if possible.
+        // Note: The handedness of the local coordinate system is stored as +/-1 in the w-coordinate
+        // Based on:
+        //  Lengyel, Eric. "Computing Tangent Space Basis Vectors for an Arbitrary Mesh".
+        //  Terathon Software 3D Graphics Library, 2001. http://www.terathon.com/code/tangent.html
+        if (!mesh.positions.empty() && !mesh.texcoords.empty() && !mesh.normals.empty())
+        {
+            XMFLOAT3* tan1 = new XMFLOAT3[numVertices * 2];
+            XMFLOAT3* tan2 = tan1 + numVertices;
+            ZeroMemory(tan1, numVertices * sizeof(XMFLOAT3) * 2);
+
+            for (int face = 0; face < numFaces; face++)
+            {
+                int i1 = shape.mesh.indices[face * 3 + 0];
+                int i2 = shape.mesh.indices[face * 3 + 1];
+                int i3 = shape.mesh.indices[face * 3 + 2];
+
+                const XMFLOAT3& v1 = (const XMFLOAT3&)shape.mesh.positions[i1 * 3];
+                const XMFLOAT3& v2 = (const XMFLOAT3&)shape.mesh.positions[i2 * 3];
+                const XMFLOAT3& v3 = (const XMFLOAT3&)shape.mesh.positions[i3 * 3];
+
+                const XMFLOAT2& w1 = (const XMFLOAT2&)shape.mesh.texcoords[i1 * 2];
+                const XMFLOAT2& w2 = (const XMFLOAT2&)shape.mesh.texcoords[i2 * 2];
+                const XMFLOAT2& w3 = (const XMFLOAT2&)shape.mesh.texcoords[i3 * 2];
+
+                float x1 = v2.x - v1.x;
+                float x2 = v3.x - v1.x;
+                float y1 = v2.y - v1.y;
+                float y2 = v3.y - v1.y;
+                float z1 = v2.z - v1.z;
+                float z2 = v3.z - v1.z;
+
+                float s1 = w2.x - w1.x;
+                float s2 = w3.x - w1.x;
+                float t1 = w2.y - w1.y;
+                float t2 = w3.y - w1.y;
+
+                float r = 1.0f / (s1 * t2 - s2 * t1);
+                XMVECTOR sdir = XMVectorSet(
+                    (t2 * x1 - t1 * x2) * r, 
+                    (t2 * y1 - t1 * y2) * r,
+                    (t2 * z1 - t1 * z2) * r,
+                    0.0f);
+                XMVECTOR tdir = XMVectorSet(
+                    (s1 * x2 - s2 * x1) * r, 
+                    (s1 * y2 - s2 * y1) * r,
+                    (s1 * z2 - s2 * z1) * r,
+                    0.0f);
+
+                XMStoreFloat3(&tan1[i1], XMVectorAdd(XMLoadFloat3(&tan1[i1]), sdir));
+                XMStoreFloat3(&tan1[i2], XMVectorAdd(XMLoadFloat3(&tan1[i2]), sdir));
+                XMStoreFloat3(&tan1[i3], XMVectorAdd(XMLoadFloat3(&tan1[i3]), sdir));
+
+                XMStoreFloat3(&tan2[i1], XMVectorAdd(XMLoadFloat3(&tan2[i1]), tdir));
+                XMStoreFloat3(&tan2[i2], XMVectorAdd(XMLoadFloat3(&tan2[i2]), tdir));
+                XMStoreFloat3(&tan2[i3], XMVectorAdd(XMLoadFloat3(&tan2[i3]), tdir));
+            }
+
+            float* tangents = new float[numVertices * 4];
+            float* bitangents = new float[numVertices * 3];
+
+            for (int vertex = 0; vertex < numVertices; vertex++)
+            {
+                XMVECTOR n = XMLoadFloat3((const XMFLOAT3*)&shape.mesh.normals[vertex * 3]);
+                XMVECTOR t = XMLoadFloat3(&tan1[vertex]);
+
+                // Gram-Schmidt orthogonalize
+                XMVECTOR tangentxyz = XMVector3Normalize(t - n * XMVector3Dot(n, t));
+                XMStoreFloat3((XMFLOAT3*)&tangents[vertex * 4], tangentxyz);
+
+                // Calculate handedness
+                tangents[vertex * 4 + 3] = (XMVectorGetX(XMVector3Dot(XMVector3Cross(n, t), XMLoadFloat3(&tan2[vertex]))) < 0.0f) ? -1.0f : 1.0f;
+                
+                // bitangent
+                XMStoreFloat3((XMFLOAT3*)&bitangents[vertex * 3], XMVector3Cross(n, tangentxyz) * tangents[vertex * 4 + 3]);
+            }
+
+            delete[] tan1;
+
+            // Upload to GPU
+            D3D11_SUBRESOURCE_DATA tangentVertexBufferData = {};
+            tangentVertexBufferData.pSysMem = tangents;
 
             CHECKHR(dev->CreateBuffer(
-                &CD3D11_BUFFER_DESC(sizeof(UINT32) * numIndices, D3D11_BIND_INDEX_BUFFER, D3D11_USAGE_IMMUTABLE), 
-                &indexBufferData, 
-                &pIndexBuffer));
+                &CD3D11_BUFFER_DESC(sizeof(VertexTangent) * numVertices, D3D11_BIND_VERTEX_BUFFER, D3D11_USAGE_IMMUTABLE),
+                &tangentVertexBufferData,
+                &pTangentBuffer));
+
+            D3D11_SUBRESOURCE_DATA bitangentVertexBufferData = {};
+            bitangentVertexBufferData.pSysMem = bitangents;
+
+            CHECKHR(dev->CreateBuffer(
+                &CD3D11_BUFFER_DESC(sizeof(VertexBitangent) * numVertices, D3D11_BIND_VERTEX_BUFFER, D3D11_USAGE_IMMUTABLE),
+                &bitangentVertexBufferData,
+                &pBitangentBuffer));
+
+            delete[] tangents;
+            delete[] bitangents;
         }
 
         int firstFace = 0;
 
-        const int numFaces = (int)shape.mesh.indices.size() / 3;
         for (int face = 0; face < numFaces; face++)
         {
             int currMTL = shape.mesh.material_ids[face];
@@ -359,6 +484,8 @@ static void SceneAddObjMesh(
             sm.pPositionVertexBuffer = pPositionBuffer;
             sm.pTexCoordVertexBuffer = pTexCoordBuffer;
             sm.pNormalVertexBuffer = pNormalBuffer;
+            sm.pTangentVertexBuffer = pTangentBuffer;
+            sm.pBitangentVertexBuffer = pBitangentBuffer;
             sm.pIndexBuffer = pIndexBuffer;
             sm.MaterialID = firstMaterial + currMTL;
             sm.IndexCountPerInstance = (face + 1 - firstFace) * 3;
@@ -461,10 +588,19 @@ void SceneInit()
     specularSamplerDesc.MaxAnisotropy = 8;
     CHECKHR(dev->CreateSamplerState(&specularSamplerDesc, &g_Scene.pSpecularSampler));
 
+    CD3D11_SAMPLER_DESC bumpSamplerDesc(D3D11_DEFAULT);
+    bumpSamplerDesc.Filter = D3D11_FILTER_ANISOTROPIC;
+    bumpSamplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+    bumpSamplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+    bumpSamplerDesc.MaxAnisotropy = 8;
+    CHECKHR(dev->CreateSamplerState(&bumpSamplerDesc, &g_Scene.pBumpSampler));
+
     D3D11_INPUT_ELEMENT_DESC sceneInputElements[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 1, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 2, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 }
+        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 2, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 3, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "BITANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 4, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
     CHECKHR(dev->CreateInputLayout(
         sceneInputElements, _countof(sceneInputElements),
@@ -541,7 +677,7 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
             up,
             &worldView.m[0][0],
             deltaTicks / (float)ticksPerSecond,
-            100.0f * (GetAsyncKeyState(VK_LSHIFT) ? 2.0f : 1.0f) * activated,
+            100.0f * (GetAsyncKeyState(VK_LSHIFT) ? 3.0f : 1.0f) * activated,
             0.5f * activated,
             80.0f,
             currMouseX - g_Scene.LastMouseX, currMouseY - g_Scene.LastMouseY,
@@ -608,6 +744,9 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
             XMStoreFloat4(&materialData->Specular, XMLoadFloat3(&material.Specular));
             XMStoreFloat4(&materialData->Shininess, XMVectorReplicate(material.Shininess));
             XMStoreFloat4(&materialData->Opacity, XMVectorReplicate(material.Opacity));
+            XMStoreFloat4(&materialData->HasDiffuse, XMVectorReplicate(material.DiffuseTextureID != -1 ? 1.0f : 0.0f));
+            XMStoreFloat4(&materialData->HasSpecular, XMVectorReplicate(material.SpecularTextureID != -1 ? 1.0f : 0.0f));
+            XMStoreFloat4(&materialData->HasBump, XMVectorReplicate(material.BumpTextureID != -1 ? 1.0f : 0.0f));
 
             dc->Unmap(g_Scene.pMaterialBuffer.Get(), 0);
             
@@ -629,6 +768,14 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
 
             ID3D11SamplerState* specularSMP = g_Scene.pSpecularSampler.Get();
             dc->PSSetSamplers(SPECULAR_SAMPLER_SLOT, 1, &specularSMP);
+
+            ID3D11ShaderResourceView* bumpSRV = NULL;
+            if (material.BumpTextureID != -1)
+                bumpSRV = g_Scene.Textures[material.BumpTextureID].SRV.Get();
+            dc->PSSetShaderResources(BUMP_TEXTURE_SLOT, 1, &bumpSRV);
+
+            ID3D11SamplerState* bumpSMP = g_Scene.pBumpSampler.Get();
+            dc->PSSetSamplers(BUMP_SAMPLER_SLOT, 1, &bumpSMP);
 
             currMaterialID = sceneNode.MaterialID;
         }
@@ -664,10 +811,20 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
             ID3D11Buffer* staticMeshVertexBuffers[] = { 
                 staticMesh.pPositionVertexBuffer.Get(), 
                 staticMesh.pTexCoordVertexBuffer.Get(), 
-                staticMesh.pNormalVertexBuffer.Get() 
+                staticMesh.pNormalVertexBuffer.Get(),
+                staticMesh.pTangentVertexBuffer.Get(),
+                staticMesh.pBitangentVertexBuffer.Get()
             };
-            UINT staticMeshStrides[] = { sizeof(VertexPosition), sizeof(VertexTexCoord), sizeof(VertexNormal) };
-            UINT staticMeshOffsets[] = { 0, 0, 0 };
+            UINT staticMeshStrides[] = { 
+                sizeof(VertexPosition), 
+                sizeof(VertexTexCoord), 
+                sizeof(VertexNormal),
+                sizeof(VertexTangent),
+                sizeof(VertexBitangent)
+            };
+            UINT staticMeshOffsets[] = {
+                0, 0, 0, 0, 0
+            };
             dc->IASetVertexBuffers(0, _countof(staticMeshVertexBuffers), staticMeshVertexBuffers, staticMeshStrides, staticMeshOffsets);
             dc->IASetIndexBuffer(staticMesh.pIndexBuffer.Get(), DXGI_FORMAT_R32_UINT, 0);
 
