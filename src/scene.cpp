@@ -139,6 +139,10 @@ struct Scene
     ComPtr<ID3D11DepthStencilState> pSceneDepthStencilState;
     ComPtr<ID3D11BlendState> pSceneBlendState;
 
+    ComPtr<ID3D11Texture3D> pDenseVoxelGrid;
+    ComPtr<ID3D11ShaderResourceView> pDenseVoxelGridSRV;
+    int VoxelGridSize;
+    
     Shader* SceneVS;
     Shader* ScenePS;
 
@@ -518,6 +522,23 @@ static int SceneAddStaticMeshSceneNode(int staticMeshID)
     return (int)g_Scene.SceneNodes.size() - 1;
 }
 
+static void SceneResizeVoxelGrid(int newSize)
+{
+    ID3D11Device* dev = RendererGetDevice();
+
+    g_Scene.VoxelGridSize = newSize;
+
+    D3D11_TEXTURE3D_DESC textureDesc = CD3D11_TEXTURE3D_DESC(DXGI_FORMAT_R32G32B32A32_TYPELESS, newSize, newSize, newSize);
+    textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
+    textureDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+    CHECKHR(dev->CreateTexture3D(&textureDesc, NULL, &g_Scene.pDenseVoxelGrid));
+
+    CHECKHR(dev->CreateShaderResourceView(
+        g_Scene.pDenseVoxelGrid.Get(),
+        &CD3D11_SHADER_RESOURCE_VIEW_DESC(D3D11_SRV_DIMENSION_TEXTURE3D, DXGI_FORMAT_R32G32B32A32_FLOAT),
+        &g_Scene.pDenseVoxelGridSRV));
+}
+
 void SceneInit()
 {
     ID3D11Device* dev = RendererGetDevice();
@@ -617,6 +638,8 @@ void SceneInit()
     D3D11_BLEND_DESC sceneBlendDesc = CD3D11_BLEND_DESC(D3D11_DEFAULT);
     CHECKHR(dev->CreateBlendState(&sceneBlendDesc, &g_Scene.pSceneBlendState));
 
+    SceneResizeVoxelGrid(512);
+
     g_Scene.LastMouseX = INT_MIN;
     g_Scene.LastMouseY = INT_MIN;
 }
@@ -640,8 +663,37 @@ void SceneResize(
     g_Scene.SceneViewport = CD3D11_VIEWPORT(0.0f, 0.0f, (FLOAT)renderWidth, (FLOAT)renderHeight);
 }
 
+static void SceneShowToolboxGUI()
+{
+    ImGuiIO& io = ImGui::GetIO();
+    int w = int(io.DisplaySize.x / io.DisplayFramebufferScale.x);
+    int h = int(io.DisplaySize.y / io.DisplayFramebufferScale.y);
+
+    int toolboxW = 300, toolboxH = 300;
+
+    ImGui::SetNextWindowSize(ImVec2((float)toolboxW, (float)toolboxH), ImGuiSetCond_Always);
+    ImGui::SetNextWindowPos(ImVec2((float)w - toolboxW, 0), ImGuiSetCond_Always);
+    if (ImGui::Begin("Toolbox", NULL, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize))
+    {
+        ImGui::Text("Voxel grid size");
+        int oldGridSize = g_Scene.VoxelGridSize;
+        ImGui::RadioButton("64 x 64", &g_Scene.VoxelGridSize, 64);
+        ImGui::RadioButton("128 x 128", &g_Scene.VoxelGridSize, 128);
+        ImGui::RadioButton("256 x 256", &g_Scene.VoxelGridSize, 256);
+        ImGui::RadioButton("512 x 512", &g_Scene.VoxelGridSize, 512);
+        if (g_Scene.VoxelGridSize != oldGridSize)
+        {
+            SceneResizeVoxelGrid(g_Scene.VoxelGridSize);
+        }
+
+        ImGui::End();
+    }
+}
+
 void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
 {
+    SceneShowToolboxGUI();
+
     uint64_t currTicks;
     QueryPerformanceCounter((LARGE_INTEGER*)&currTicks);
     

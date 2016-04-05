@@ -35,6 +35,9 @@ struct Renderer
 {
     bool IsInit;
 
+    ComPtr<IDXGIFactory> pDXGIFactory;
+    ComPtr<IDXGIAdapter> pDXGIAdapter;
+
     ComPtr<ID3D11Device> pDevice;
     ComPtr<ID3D11DeviceContext> pDeviceContext;
     ComPtr<IDXGISwapChain2> pSwapChain;
@@ -110,13 +113,15 @@ void RendererInit(void* pNativeWindowHandle)
     hFrameLatencyWaitableObject = pSwapChain->GetFrameLatencyWaitableObject();
     CHECKHR(pDXGIFactory->MakeWindowAssociation((HWND)pNativeWindowHandle, DXGI_MWA_NO_WINDOW_CHANGES));
 
-    g_Renderer.pDevice.Swap(pDevice);
-    g_Renderer.pDeviceContext.Swap(pDeviceContext);
-    g_Renderer.pSwapChain.Swap(pSwapChain);
+    g_Renderer.pDXGIAdapter = pDXGIAdapter;
+    g_Renderer.pDXGIFactory = pDXGIFactory;
+    g_Renderer.pDevice = pDevice;
+    g_Renderer.pDeviceContext = pDeviceContext;
+    g_Renderer.pSwapChain = pSwapChain;
     g_Renderer.hFrameLatencyWaitableObject = hFrameLatencyWaitableObject;
     g_Renderer.IsInit = true;
 
-    ImGui_ImplDX11_Init(pNativeWindowHandle, g_Renderer.pDevice.Get(), g_Renderer.pDeviceContext.Get());
+    ImGui_ImplDX11_Init(pNativeWindowHandle, pDevice.Get(), pDeviceContext.Get());
     SceneInit();
 }
 
@@ -308,6 +313,54 @@ void RendererResize(
     SceneResize(windowWidth, windowHeight, renderWidth, renderHeight);
 }
 
+static void RendererShowSystemInfoGUI()
+{
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiSetCond_Always);
+    if (ImGui::Begin("Info", NULL, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize))
+    {
+        char cpuBrandString[0x40];
+        memset(cpuBrandString, 0, sizeof(cpuBrandString));
+
+        int cpuInfo[4] = { -1 };
+        __cpuid(cpuInfo, 0x80000002);
+        memcpy(cpuBrandString, cpuInfo, sizeof(cpuInfo));
+        __cpuid(cpuInfo, 0x80000003);
+        memcpy(cpuBrandString + 16, cpuInfo, sizeof(cpuInfo));
+        __cpuid(cpuInfo, 0x80000004);
+        memcpy(cpuBrandString + 32, cpuInfo, sizeof(cpuInfo));
+
+        ImGui::Text("CPU: %s", cpuBrandString);
+
+        DXGI_ADAPTER_DESC adapterDesc;
+        if (SUCCEEDED(g_Renderer.pDXGIAdapter->GetDesc(&adapterDesc)))
+        {
+            std::string description = MultiByteFromWide(adapterDesc.Description);
+            ImGui::Text("Adapter: %s", description.c_str());
+            
+            ImGui::Text("Total video memory: %d MB", adapterDesc.DedicatedVideoMemory / 1024 / 1024);
+            
+            if (adapterDesc.DedicatedSystemMemory != 0)
+                ImGui::Text("Total system memory: %d MB", adapterDesc.DedicatedSystemMemory / 1024 / 1024);
+
+            ComPtr<IDXGIAdapter3> adapter3;
+            if (SUCCEEDED(g_Renderer.pDXGIAdapter.As(&adapter3)))
+            {
+                DXGI_QUERY_VIDEO_MEMORY_INFO vidmeminfo;
+                if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &vidmeminfo)))
+                    ImGui::Text("Local memory usage: %d MB", vidmeminfo.CurrentUsage / 1024 / 1024);
+
+                if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &vidmeminfo)))
+                    ImGui::Text("Non-local memory usage: %d MB", vidmeminfo.CurrentUsage / 1024 / 1024);
+            }
+        }
+
+        D3D_FEATURE_LEVEL featureLevel = g_Renderer.pDevice->GetFeatureLevel();
+        ImGui::Text("Feature level %d.%d", (featureLevel >> 12) & 0x0F, (featureLevel >> 8) & 0x0F);
+    }
+
+    ImGui::End();
+}
+
 void RendererPaint()
 {
     ID3D11Device* dev = g_Renderer.pDevice.Get();
@@ -324,6 +377,8 @@ void RendererPaint()
     {
         RendererReloadShader(&shader);
     }
+
+    RendererShowSystemInfoGUI();
 
     // grab the current backbuffer
     ComPtr<ID3D11Texture2D> pBackBufferTex2D;
