@@ -7,15 +7,19 @@
 
 #include "imgui.h"
 #include "tiny_obj_loader.h"
+#include "stb_image.h"
 
 #include <DirectXMath.h>
 
 using namespace DirectX;
 
+// to make HLSL compile as C++
 using float4 = XMFLOAT4;
 using float4x4 = XMFLOAT4X4;
 
 #include "shaders/common.hlsl"
+
+#include <unordered_map>
 
 struct VertexPosition
 {
@@ -32,6 +36,13 @@ struct VertexNormal
     XMFLOAT3 Normal;
 };
 
+struct Texture
+{
+    std::string Name;
+    ComPtr<ID3D11Resource> Resource;
+    ComPtr<ID3D11ShaderResourceView> SRV;
+};
+
 struct Material
 {
     std::string Name;
@@ -40,6 +51,7 @@ struct Material
     XMFLOAT3 Specular;
     float Shininess;
     float Opacity;
+    int DiffuseTextureID;
 };
 
 struct StaticMesh
@@ -87,6 +99,8 @@ struct SceneNode
 
 struct Scene
 {
+    std::vector<Texture> Textures;
+    std::unordered_map<std::string, int> TextureNameToID;
     std::vector<Material> Materials;
     std::vector<StaticMesh> StaticMeshes;
     std::vector<SceneNode> SceneNodes;
@@ -101,6 +115,8 @@ struct Scene
     ComPtr<ID3D11Buffer> pCameraBuffer;
     ComPtr<ID3D11Buffer> pMaterialBuffer;
     ComPtr<ID3D11Buffer> pSceneNodeBuffer;
+
+    ComPtr<ID3D11SamplerState> pDiffuseSampler;
 
     ComPtr<ID3D11InputLayout> pSceneInputLayout;
     ComPtr<ID3D11RasterizerState> pSceneRasterizerState;
@@ -122,6 +138,7 @@ static void SceneAddObjMesh(
     std::vector<int>* newMaterialIDs = NULL)
 {
     ID3D11Device* dev = RendererGetDevice();
+    ID3D11DeviceContext* dc = RendererGetDeviceContext();
 
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> materials;
@@ -148,6 +165,54 @@ static void SceneAddObjMesh(
         m.Specular.z = material.specular[2];
         m.Shininess = material.shininess;
         m.Opacity = material.dissolve;
+        m.DiffuseTextureID = -1;
+
+        if (!material.diffuse_texname.empty())
+        {
+            std::string diffusePath = mtlbasepath + material.diffuse_texname;
+            auto foundDiffuse = g_Scene.TextureNameToID.find(diffusePath);
+            if (foundDiffuse == end(g_Scene.TextureNameToID))
+            {
+                int width, height, comp;
+                stbi_uc* imgbytes = stbi_load(diffusePath.c_str(), &width, &height, &comp, 4);
+                if (imgbytes == NULL)
+                {
+                    SimpleMessageBox_FatalError("stbi_load(%s) failed.\nReason: %s", diffusePath.c_str(), stbi_failure_reason());
+                }
+
+                ComPtr<ID3D11Texture2D> pDiffuseTexture;
+
+                D3D11_TEXTURE2D_DESC diffuseTextureDesc = CD3D11_TEXTURE2D_DESC(DXGI_FORMAT_R8G8B8A8_TYPELESS, width, height);
+                diffuseTextureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+                diffuseTextureDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+                CHECKHR(dev->CreateTexture2D(&diffuseTextureDesc, NULL, &pDiffuseTexture));
+
+                ComPtr<ID3D11ShaderResourceView> pDiffuseSRV;
+
+                CHECKHR(dev->CreateShaderResourceView(
+                    pDiffuseTexture.Get(),
+                    &CD3D11_SHADER_RESOURCE_VIEW_DESC(D3D11_SRV_DIMENSION_TEXTURE2D, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB),
+                    &pDiffuseSRV));
+
+                dc->UpdateSubresource(pDiffuseTexture.Get(), 0, NULL, imgbytes, width * sizeof(UINT32), width * height * sizeof(UINT32));
+                dc->GenerateMips(pDiffuseSRV.Get());
+
+                Texture texture;
+                texture.Name = diffusePath;
+                texture.Resource = pDiffuseTexture;
+                texture.SRV = pDiffuseSRV;
+
+                int diffuseTextureID = (int)g_Scene.Textures.size();
+                g_Scene.Textures.push_back(std::move(texture));
+                g_Scene.TextureNameToID[diffusePath] = diffuseTextureID;
+
+                m.DiffuseTextureID = diffuseTextureID;
+            }
+            else
+            {
+                m.DiffuseTextureID = foundDiffuse->second;
+            }
+        }
 
         if (newMaterialIDs)
             newMaterialIDs->push_back((int)g_Scene.Materials.size());
@@ -173,71 +238,62 @@ static void SceneAddObjMesh(
 
         if (!mesh.positions.empty())
         {
-            D3D11_BUFFER_DESC positionVertexBufferDesc = {};
-            positionVertexBufferDesc.ByteWidth = sizeof(VertexPosition) * numVertices;
-            positionVertexBufferDesc.Usage = D3D11_USAGE_IMMUTABLE;
-            positionVertexBufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-
             D3D11_SUBRESOURCE_DATA positionVertexBufferData = {};
             positionVertexBufferData.pSysMem = mesh.positions.data();
 
-            CHECKHR(dev->CreateBuffer(&positionVertexBufferDesc, &positionVertexBufferData, &pPositionBuffer));
+            CHECKHR(dev->CreateBuffer(
+                &CD3D11_BUFFER_DESC(sizeof(VertexPosition) * numVertices, D3D11_BIND_VERTEX_BUFFER, D3D11_USAGE_IMMUTABLE), 
+                &positionVertexBufferData, 
+                &pPositionBuffer));
         }
 
         if (!mesh.texcoords.empty())
         {
-            D3D11_BUFFER_DESC texCoordVertexBufferDesc = {};
-            texCoordVertexBufferDesc.ByteWidth = sizeof(VertexTexCoord) * numVertices;
-            texCoordVertexBufferDesc.Usage = D3D11_USAGE_IMMUTABLE;
-            texCoordVertexBufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+            if (mesh.texcoords.size() != numVertices * 2)
+                SimpleMessageBox_FatalError("TexCoord conversion required (Expected 2D, got %dD)", mesh.texcoords.size() / numVertices);
+
+            // flip all the texcoord.y (GL -> DX convention)
+            for (int i = 1; i < mesh.texcoords.size(); i += 2)
+            {
+                mesh.texcoords[i] = 1.0f - mesh.texcoords[i];
+            }
 
             D3D11_SUBRESOURCE_DATA texcoordVertexBufferData = {};
-            if (mesh.texcoords.size() == numVertices * 2)
-            {
-                texcoordVertexBufferData.pSysMem = mesh.texcoords.data();
-            }
-            else
-            {
-                SimpleMessageBox_FatalError("TexCoord conversion required (Expected 2D, got %dD)", mesh.texcoords.size() / numVertices);
-            }
+            texcoordVertexBufferData.pSysMem = mesh.texcoords.data();
 
-            CHECKHR(dev->CreateBuffer(&texCoordVertexBufferDesc, &texcoordVertexBufferData, &pTexCoordBuffer));
+            CHECKHR(dev->CreateBuffer(
+                &CD3D11_BUFFER_DESC(sizeof(VertexTexCoord) * numVertices,  D3D11_BIND_VERTEX_BUFFER, D3D11_USAGE_IMMUTABLE), 
+                &texcoordVertexBufferData, 
+                &pTexCoordBuffer));
         }
 
         if (!mesh.normals.empty())
         {
-            D3D11_BUFFER_DESC normalVertexBufferDesc = {};
-            normalVertexBufferDesc.ByteWidth = sizeof(VertexNormal) * numVertices;
-            normalVertexBufferDesc.Usage = D3D11_USAGE_IMMUTABLE;
-            normalVertexBufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+            if (mesh.normals.size() != numVertices * 3)
+                SimpleMessageBox_FatalError("Normal conversion required (Expected 3D, got %dD)", mesh.normals.size() / numVertices);
 
             D3D11_SUBRESOURCE_DATA normalVertexBufferData = {};
-            if (mesh.normals.size() == numVertices * 3)
-            {
-                normalVertexBufferData.pSysMem = mesh.normals.data();
-            }
-            else
-            {
-                SimpleMessageBox_FatalError("Normal conversion required (Expected 3D, got %dD)", mesh.normals.size() / numVertices);
-            }
+            normalVertexBufferData.pSysMem = mesh.normals.data();
 
-            CHECKHR(dev->CreateBuffer(&normalVertexBufferDesc, &normalVertexBufferData, &pNormalBuffer));
+            CHECKHR(dev->CreateBuffer(
+                &CD3D11_BUFFER_DESC(sizeof(VertexNormal) * numVertices, D3D11_BIND_VERTEX_BUFFER, D3D11_USAGE_IMMUTABLE),
+                &normalVertexBufferData, 
+                &pNormalBuffer));
         }
 
         UINT numIndices = (UINT)mesh.indices.size();
 
         if (!mesh.indices.empty())
         {
-            D3D11_BUFFER_DESC indexBufferDesc = {};
-            indexBufferDesc.ByteWidth = sizeof(UINT32) * numIndices;
-            indexBufferDesc.Usage = D3D11_USAGE_IMMUTABLE;
-            indexBufferDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+            static_assert(sizeof(mesh.indices[0]) == sizeof(UINT32), "Expecting UINT32 indices");
 
             D3D11_SUBRESOURCE_DATA indexBufferData = {};
-            static_assert(sizeof(mesh.indices[0]) == sizeof(UINT32), "Expecting UINT32 indices");
             indexBufferData.pSysMem = mesh.indices.data();
 
-            CHECKHR(dev->CreateBuffer(&indexBufferDesc, &indexBufferData, &pIndexBuffer));
+            CHECKHR(dev->CreateBuffer(
+                &CD3D11_BUFFER_DESC(sizeof(UINT32) * numIndices, D3D11_BIND_INDEX_BUFFER, D3D11_USAGE_IMMUTABLE), 
+                &indexBufferData, 
+                &pIndexBuffer));
         }
 
         int firstFace = 0;
@@ -335,26 +391,27 @@ void SceneInit()
     XMStoreFloat3(&g_Scene.CameraPos, XMVectorSet(0.0f, 200.0f, 0.0f, 1.0f));
     XMStoreFloat3(&g_Scene.CameraLook, XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f));
 
-    D3D11_BUFFER_DESC cameraBufferDesc = {};
-    cameraBufferDesc.ByteWidth = sizeof(PerCameraData);
-    cameraBufferDesc.Usage = D3D11_USAGE_DYNAMIC;
-    cameraBufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    cameraBufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    CHECKHR(dev->CreateBuffer(&cameraBufferDesc, NULL, &g_Scene.pCameraBuffer));
+    CHECKHR(dev->CreateBuffer(
+        &CD3D11_BUFFER_DESC(sizeof(PerCameraData), D3D11_BIND_CONSTANT_BUFFER, D3D11_USAGE_DYNAMIC, D3D11_CPU_ACCESS_WRITE),
+        NULL,
+        &g_Scene.pCameraBuffer));
 
-    D3D11_BUFFER_DESC materialBufferDesc = {};
-    materialBufferDesc.ByteWidth = sizeof(PerMaterialData);
-    materialBufferDesc.Usage = D3D11_USAGE_DYNAMIC;
-    materialBufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    materialBufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    CHECKHR(dev->CreateBuffer(&materialBufferDesc, NULL, &g_Scene.pMaterialBuffer));
+    CHECKHR(dev->CreateBuffer(
+        &CD3D11_BUFFER_DESC(sizeof(PerMaterialData), D3D11_BIND_CONSTANT_BUFFER, D3D11_USAGE_DYNAMIC, D3D11_CPU_ACCESS_WRITE),
+        NULL, 
+        &g_Scene.pMaterialBuffer));
 
-    D3D11_BUFFER_DESC sceneNodeBufferDesc = {};
-    sceneNodeBufferDesc.ByteWidth = sizeof(PerSceneNodeData);
-    sceneNodeBufferDesc.Usage = D3D11_USAGE_DYNAMIC;
-    sceneNodeBufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    sceneNodeBufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    CHECKHR(dev->CreateBuffer(&sceneNodeBufferDesc, NULL, &g_Scene.pSceneNodeBuffer));
+    CHECKHR(dev->CreateBuffer(
+        &CD3D11_BUFFER_DESC(sizeof(PerSceneNodeData), D3D11_BIND_CONSTANT_BUFFER, D3D11_USAGE_DYNAMIC, D3D11_CPU_ACCESS_WRITE), 
+        NULL, 
+        &g_Scene.pSceneNodeBuffer));
+
+    CD3D11_SAMPLER_DESC diffuseSamplerDesc(D3D11_DEFAULT);
+    diffuseSamplerDesc.Filter = D3D11_FILTER_ANISOTROPIC;
+    diffuseSamplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+    diffuseSamplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+    diffuseSamplerDesc.MaxAnisotropy = 8;
+    CHECKHR(dev->CreateSamplerState(&diffuseSamplerDesc, &g_Scene.pDiffuseSampler));
 
     D3D11_INPUT_ELEMENT_DESC sceneInputElements[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
@@ -366,21 +423,14 @@ void SceneInit()
         g_Scene.SceneVS->Blob->GetBufferPointer(), g_Scene.SceneVS->Blob->GetBufferSize(),
         &g_Scene.pSceneInputLayout));
 
-    D3D11_RASTERIZER_DESC sceneRasterizerDesc = {};
-    sceneRasterizerDesc.FillMode = D3D11_FILL_SOLID;
+    D3D11_RASTERIZER_DESC sceneRasterizerDesc = CD3D11_RASTERIZER_DESC(D3D11_DEFAULT);
     sceneRasterizerDesc.CullMode = D3D11_CULL_NONE;
-    sceneRasterizerDesc.FrontCounterClockwise = FALSE;
-    sceneRasterizerDesc.DepthClipEnable = TRUE;
     CHECKHR(dev->CreateRasterizerState(&sceneRasterizerDesc, &g_Scene.pSceneRasterizerState));
 
-    D3D11_DEPTH_STENCIL_DESC sceneDepthStencilDesc = {};
-    sceneDepthStencilDesc.DepthEnable = TRUE;
-    sceneDepthStencilDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
-    sceneDepthStencilDesc.DepthFunc = D3D11_COMPARISON_LESS;
+    D3D11_DEPTH_STENCIL_DESC sceneDepthStencilDesc = CD3D11_DEPTH_STENCIL_DESC(D3D11_DEFAULT);
     CHECKHR(dev->CreateDepthStencilState(&sceneDepthStencilDesc, &g_Scene.pSceneDepthStencilState));
 
-    D3D11_BLEND_DESC sceneBlendDesc = {};
-    sceneBlendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    D3D11_BLEND_DESC sceneBlendDesc = CD3D11_BLEND_DESC(D3D11_DEFAULT);
     CHECKHR(dev->CreateBlendState(&sceneBlendDesc, &g_Scene.pSceneBlendState));
 
     g_Scene.LastMouseX = INT_MIN;
@@ -393,28 +443,17 @@ void SceneResize(
 {
     ID3D11Device* dev = RendererGetDevice();
 
-    D3D11_TEXTURE2D_DESC sceneDepthTex2DDesc = {};
-    sceneDepthTex2DDesc.Width = renderWidth;
-    sceneDepthTex2DDesc.Height = renderHeight;
-    sceneDepthTex2DDesc.MipLevels = 1;
-    sceneDepthTex2DDesc.ArraySize = 1;
-    sceneDepthTex2DDesc.Format = DXGI_FORMAT_R32_TYPELESS;
-    sceneDepthTex2DDesc.SampleDesc.Count = 1;
-    sceneDepthTex2DDesc.Usage = D3D11_USAGE_DEFAULT;
-    sceneDepthTex2DDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-    ComPtr<ID3D11Texture2D> pSceneDepthTex2D;
-    CHECKHR(dev->CreateTexture2D(&sceneDepthTex2DDesc, NULL, &pSceneDepthTex2D));
+    CHECKHR(dev->CreateTexture2D(
+        &CD3D11_TEXTURE2D_DESC(DXGI_FORMAT_R32_TYPELESS, renderWidth, renderHeight, 1, 1, D3D11_BIND_DEPTH_STENCIL), 
+        NULL, 
+        &g_Scene.pSceneDepthTex2D));
 
-    D3D11_DEPTH_STENCIL_VIEW_DESC sceneDepthDSVDesc = {};
-    sceneDepthDSVDesc.Format = DXGI_FORMAT_D32_FLOAT;
-    sceneDepthDSVDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
-    ComPtr<ID3D11DepthStencilView> pSceneDepthDSV;
-    CHECKHR(dev->CreateDepthStencilView(pSceneDepthTex2D.Get(), &sceneDepthDSVDesc, &pSceneDepthDSV));
+    CHECKHR(dev->CreateDepthStencilView(
+        g_Scene.pSceneDepthTex2D.Get(), 
+        &CD3D11_DEPTH_STENCIL_VIEW_DESC(D3D11_DSV_DIMENSION_TEXTURE2D, DXGI_FORMAT_D32_FLOAT), 
+        &g_Scene.pSceneDepthDSV));
 
-    g_Scene.SceneViewport = D3D11_VIEWPORT{ 0.0f, 0.0f, (FLOAT)renderWidth, (FLOAT)renderHeight, 0.0f, 1.0f };
-
-    g_Scene.pSceneDepthTex2D.Swap(pSceneDepthTex2D);
-    g_Scene.pSceneDepthDSV.Swap(pSceneDepthDSV);
+    g_Scene.SceneViewport = CD3D11_VIEWPORT(0.0f, 0.0f, (FLOAT)renderWidth, (FLOAT)renderHeight);
 }
 
 void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
@@ -519,10 +558,18 @@ void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
             XMStoreFloat4(&materialData->Shininess, XMVectorReplicate(material.Shininess));
             XMStoreFloat4(&materialData->Opacity, XMVectorReplicate(material.Opacity));
 
-            dc->Unmap(g_Scene.pSceneNodeBuffer.Get(), 0);
+            dc->Unmap(g_Scene.pMaterialBuffer.Get(), 0);
             
             ID3D11Buffer* materialCBV = g_Scene.pMaterialBuffer.Get();
             dc->PSSetConstantBuffers(MATERIAL_BUFFER_SLOT, 1, &materialCBV);
+
+            ID3D11ShaderResourceView* diffuseSRV = NULL;
+            if (material.DiffuseTextureID != -1)
+                diffuseSRV = g_Scene.Textures[material.DiffuseTextureID].SRV.Get();
+            dc->PSSetShaderResources(DIFFUSE_TEXTURE_SLOT, 1, &diffuseSRV);
+
+            ID3D11SamplerState* diffuseSMP = g_Scene.pDiffuseSampler.Get();
+            dc->PSSetSamplers(DIFFUSE_SAMPLER_SLOT, 1, &diffuseSMP);
 
             currMaterialID = sceneNode.MaterialID;
         }

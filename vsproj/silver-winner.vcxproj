@@ -22,6 +22,7 @@
     <ClCompile Include="..\src\main.cpp" />
     <ClCompile Include="..\src\renderer.cpp" />
     <ClCompile Include="..\src\scene.cpp" />
+    <ClCompile Include="..\src\stb_image.c" />
     <ClCompile Include="..\src\tiny_obj_loader.cc" />
   </ItemGroup>
   <ItemGroup>
@@ -35,6 +36,7 @@
     <ClInclude Include="..\src\imgui_internal.h" />
     <ClInclude Include="..\src\renderer.h" />
     <ClInclude Include="..\src\scene.h" />
+    <ClInclude Include="..\src\stb_image.h" />
     <ClInclude Include="..\src\stb_rect_pack.h" />
     <ClInclude Include="..\src\stb_textedit.h" />
     <ClInclude Include="..\src\stb_truetype.h" />

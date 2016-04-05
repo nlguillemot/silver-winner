@@ -181,7 +181,7 @@ static void RendererReloadShader(ReloadableShader* shader)
     {
         std::string hrs = MultiByteFromHR(hr);
         fprintf(stderr,
-            "Error (%s):\n%s%s%s",
+            "Error (%s):\n%s%s%s\n",
             path.c_str(),
             hrs.c_str(),
             pErrorMsgs ? "\n" : "",

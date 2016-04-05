@@ -20,5 +20,9 @@ void SimpleMessageBox_FatalError(const char* fmt, ...)
     
     va_end(vl);
 
+#ifdef _DEBUG
+    DebugBreak();
+#endif
+
     ExitProcess(-1);
 }

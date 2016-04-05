@@ -13,6 +13,7 @@
     <ClCompile Include="..\src\scene.cpp" />
     <ClCompile Include="..\src\tiny_obj_loader.cc" />
     <ClCompile Include="..\src\flythrough_camera.c" />
+    <ClCompile Include="..\src\stb_image.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\app.h" />
@@ -29,6 +30,7 @@
     <ClInclude Include="..\src\stb_truetype.h" />
     <ClInclude Include="..\src\tiny_obj_loader.h" />
     <ClInclude Include="..\src\flythrough_camera.h" />
+    <ClInclude Include="..\src\stb_image.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="shaders">
