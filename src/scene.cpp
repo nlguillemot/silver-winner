@@ -528,14 +528,14 @@ static void SceneResizeVoxelGrid(int newSize)
 
     g_Scene.VoxelGridSize = newSize;
 
-    D3D11_TEXTURE3D_DESC textureDesc = CD3D11_TEXTURE3D_DESC(DXGI_FORMAT_R32G32B32A32_TYPELESS, newSize, newSize, newSize);
+    D3D11_TEXTURE3D_DESC textureDesc = CD3D11_TEXTURE3D_DESC(DXGI_FORMAT_R32_TYPELESS, newSize, newSize, newSize);
     textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
     textureDesc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
     CHECKHR(dev->CreateTexture3D(&textureDesc, NULL, &g_Scene.pDenseVoxelGrid));
 
     CHECKHR(dev->CreateShaderResourceView(
         g_Scene.pDenseVoxelGrid.Get(),
-        &CD3D11_SHADER_RESOURCE_VIEW_DESC(D3D11_SRV_DIMENSION_TEXTURE3D, DXGI_FORMAT_R32G32B32A32_FLOAT),
+        &CD3D11_SHADER_RESOURCE_VIEW_DESC(D3D11_SRV_DIMENSION_TEXTURE3D, DXGI_FORMAT_R32_FLOAT),
         &g_Scene.pDenseVoxelGridSRV));
 }
 

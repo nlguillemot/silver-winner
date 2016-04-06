@@ -337,7 +337,8 @@ static void RendererShowSystemInfoGUI()
             std::string description = MultiByteFromWide(adapterDesc.Description);
             ImGui::Text("Adapter: %s", description.c_str());
             
-            ImGui::Text("Total video memory: %d MB", adapterDesc.DedicatedVideoMemory / 1024 / 1024);
+            if (adapterDesc.DedicatedVideoMemory != 0)
+                ImGui::Text("Total video memory: %d MB", adapterDesc.DedicatedVideoMemory / 1024 / 1024);
             
             if (adapterDesc.DedicatedSystemMemory != 0)
                 ImGui::Text("Total system memory: %d MB", adapterDesc.DedicatedSystemMemory / 1024 / 1024);
@@ -347,10 +348,12 @@ static void RendererShowSystemInfoGUI()
             {
                 DXGI_QUERY_VIDEO_MEMORY_INFO vidmeminfo;
                 if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &vidmeminfo)))
-                    ImGui::Text("Local memory usage: %d MB", vidmeminfo.CurrentUsage / 1024 / 1024);
+                    if (vidmeminfo.CurrentUsage != 0)
+                        ImGui::Text("Local memory usage: %d MB", vidmeminfo.CurrentUsage / 1024 / 1024);
 
                 if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &vidmeminfo)))
-                    ImGui::Text("Non-local memory usage: %d MB", vidmeminfo.CurrentUsage / 1024 / 1024);
+                    if (vidmeminfo.CurrentUsage != 0)
+                        ImGui::Text("Non-local memory usage: %d MB", vidmeminfo.CurrentUsage / 1024 / 1024);
             }
         }
 
