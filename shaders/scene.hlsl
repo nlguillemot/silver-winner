@@ -88,8 +88,8 @@ PSOut PSmain(VSOut input)
         float b21 = BumpTexture.Sample(BumpSampler, input.TexCoord, boff.zy).x;
         float b10 = BumpTexture.Sample(BumpSampler, input.TexCoord, boff.yx).x;
         float b12 = BumpTexture.Sample(BumpSampler, input.TexCoord, boff.yz).x;
-        float3 va = normalize(float3(2, 0, b21 - b01));
-        float3 vb = normalize(float3(0, 2, b12 - b10));
+        float3 va = normalize(float3(2, 0, (b21 - b01) / input.Position.w * 3000));
+        float3 vb = normalize(float3(0, 2, (b12 - b10) / input.Position.w * 3000));
         float4 bump = float4(cross(va, vb), b11);
 
         float3 worldTangent = normalize(input.WorldTangent.xyz) * input.WorldTangent.w;

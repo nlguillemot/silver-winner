@@ -357,7 +357,6 @@ static void RendererShowSystemInfoGUI()
         D3D_FEATURE_LEVEL featureLevel = g_Renderer.pDevice->GetFeatureLevel();
         ImGui::Text("Feature level %d.%d", (featureLevel >> 12) & 0x0F, (featureLevel >> 8) & 0x0F);
     }
-
     ImGui::End();
 }
 

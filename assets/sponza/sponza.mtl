@@ -91,7 +91,7 @@ newmtl bricks
 	illum 2
 	Ka 0.2880 0.2880 0.2880
 	Kd 0.5880 0.5880 0.5880
-	Ks 0.5880 0.5880 0.5880
+	Ks 0.1880 0.1880 0.1880
 	Ke 0.0000 0.0000 0.0000
 	map_Ka textures\spnza_bricks_a_diff.tga
 	map_Kd textures\spnza_bricks_a_diff.tga
@@ -296,6 +296,8 @@ newmtl fabric_g
 	map_Ka textures\sponza_curtain_blue_diff.tga
 	map_Kd textures\sponza_curtain_blue_diff.tga
 	map_Ks textures\sponza_curtain_spec.png
+	map_bump textures\sponza_curtain_bump.png
+	bump textures\sponza_curtain_bump.png
 
 newmtl fabric_c
 	Ns 10.0000
@@ -311,6 +313,8 @@ newmtl fabric_c
 	map_Ka textures\sponza_curtain_diff.tga
 	map_Kd textures\sponza_curtain_diff.tga
 	map_Ks textures\sponza_curtain_spec.png
+	map_bump textures\sponza_curtain_bump.png
+	bump textures\sponza_curtain_bump.png
     
 newmtl fabric_f
 	Ns 10.0000
@@ -326,6 +330,8 @@ newmtl fabric_f
 	map_Ka textures\sponza_curtain_green_diff.tga
 	map_Kd textures\sponza_curtain_green_diff.tga
 	map_Ks textures\sponza_curtain_spec.png
+	map_bump textures\sponza_curtain_bump.png
+	bump textures\sponza_curtain_bump.png
     
 newmtl chain
 	Ns 10.0000

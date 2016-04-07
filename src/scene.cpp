@@ -675,6 +675,7 @@ static void SceneShowToolboxGUI()
     ImGui::SetNextWindowPos(ImVec2((float)w - toolboxW, 0), ImGuiSetCond_Always);
     if (ImGui::Begin("Toolbox", NULL, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize))
     {
+        ImGui::ColorButton(ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
         ImGui::Text("Voxel grid size");
         int oldGridSize = g_Scene.VoxelGridSize;
         ImGui::RadioButton("64 x 64", &g_Scene.VoxelGridSize, 64);
@@ -685,9 +686,8 @@ static void SceneShowToolboxGUI()
         {
             SceneResizeVoxelGrid(g_Scene.VoxelGridSize);
         }
-
-        ImGui::End();
     }
+    ImGui::End();
 }
 
 void ScenePaint(ID3D11RenderTargetView* pBackBufferRTV)
