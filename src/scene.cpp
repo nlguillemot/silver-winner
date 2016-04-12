@@ -254,13 +254,27 @@ static void SceneAddObjMesh(
 
                 ComPtr<ID3D11ShaderResourceView> pSRV;
 
+                DXGI_FORMAT srvFormat = kTextureTypeToSRVFormat[ttl.Type];
+                DXGI_FORMAT mipFormat = srvFormat;
+                if (mipFormat == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)
+                {
+                    // Skylake hack
+                    mipFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+                }
+
                 CHECKHR(dev->CreateShaderResourceView(
                     pTexture.Get(),
-                    &CD3D11_SHADER_RESOURCE_VIEW_DESC(D3D11_SRV_DIMENSION_TEXTURE2D, kTextureTypeToSRVFormat[ttl.Type]),
+                    &CD3D11_SHADER_RESOURCE_VIEW_DESC(D3D11_SRV_DIMENSION_TEXTURE2D, mipFormat),
                     &pSRV));
 
                 dc->UpdateSubresource(pTexture.Get(), 0, NULL, imgbytes, width * req_comp, width * height * req_comp);
                 dc->GenerateMips(pSRV.Get());
+
+                // Hack for Skylake
+                CHECKHR(dev->CreateShaderResourceView(
+                    pTexture.Get(),
+                    &CD3D11_SHADER_RESOURCE_VIEW_DESC(D3D11_SRV_DIMENSION_TEXTURE2D, srvFormat),
+                    &pSRV));
 
                 Texture texture;
                 texture.Name = texturePath;
